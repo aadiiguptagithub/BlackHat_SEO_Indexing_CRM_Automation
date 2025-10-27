@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  test-backend:
+    image: node:18-alpine
+    ports:
+      - "4001:4000"
+    environment:
+      - NODE_ENV=test
+      - PORT=4000
+      - MONGODB_URI=mongodb://test-mongo:27017/blackhat_test
+    volumes:
+      - ../backend:/app
+    working_dir: /app
+    command: npm run test:server
+    depends_on:
+      - test-mongo
+    networks:
+      - test-network
+
+  test-mongo:
+    image: mongo:6-alpine
+    ports:
+      - "27018:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=blackhat_test
+    volumes:
+      - test_mongo_data:/data/db
+    networks:
+      - test-network
+
+volumes:
+  test_mongo_data:
+
+networks:
+  test-network:
+    driver: bridge

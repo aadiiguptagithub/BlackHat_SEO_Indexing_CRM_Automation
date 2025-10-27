@@ -1,0 +1,125 @@
+"""
+Smart Worker with Auto-Shutdown
+Automatically stops when no tasks are available
+"""
+import time
+import random
+import signal
+import sys
+from datetime import datetime, timedelta
+from .task_executor import execute_task
+from src.client.api import api_client
+from src.config import config
+from src.utils.logging import logger
+
+class SmartWorker:
+    def __init__(self, idle_timeout_minutes=5, max_empty_polls=10):
+        self.running = True
+        self.idle_timeout = timedelta(minutes=idle_timeout_minutes)
+        self.max_empty_polls = max_empty_polls
+        self.empty_poll_count = 0
+        self.last_task_time = datetime.now()
+        
+        signal.signal(signal.SIGINT, self._shutdown_handler)
+        signal.signal(signal.SIGTERM, self._shutdown_handler)
+    
+    def _shutdown_handler(self, signum, frame):
+        logger.info("Shutdown signal received")
+        self.running = False
+    
+    def _should_shutdown(self):
+        """Check if worker should shutdown due to inactivity"""
+        idle_time = datetime.now() - self.last_task_time
+        
+        # Shutdown if idle for too long
+        if idle_time > self.idle_timeout:
+            logger.info(f"No tasks for {idle_time.total_seconds()/60:.1f} minutes. Shutting down to save resources.")
+            return True
+        
+        # Shutdown if too many consecutive empty polls
+        if self.empty_poll_count >= self.max_empty_polls:
+            logger.info(f"No tasks found after {self.empty_poll_count} polls. Shutting down.")
+            return True
+        
+        return False
+    
+    def run(self):
+        """Main worker loop with smart shutdown"""
+        logger.info("Smart Worker started")
+        logger.info(f"Auto-shutdown after {self.idle_timeout.total_seconds()/60:.0f} minutes of inactivity")
+        
+        while self.running:
+            try:
+                # Claim task from API
+                task_data = api_client.claim_task()
+                
+                if not task_data:
+                    self.empty_poll_count += 1
+                    
+                    # Check if should shutdown
+                    if self._should_shutdown():
+                        logger.info("Initiating graceful shutdown")
+                        break
+                    
+                    # Sleep with exponential backoff
+                    sleep_time = min(30, config.POLL_INTERVAL_MS / 1000 * (1 + self.empty_poll_count * 0.5))
+                    logger.debug(f"No tasks, sleeping {sleep_time:.1f}s (empty polls: {self.empty_poll_count})")
+                    time.sleep(sleep_time)
+                    continue
+                
+                # Reset counters when task found
+                self.empty_poll_count = 0
+                self.last_task_time = datetime.now()
+                
+                # Extract task info
+                submission_id = task_data.get('_id')
+                raw_job = task_data.get('jobId')
+                job_id = raw_job.get('_id') if isinstance(raw_job, dict) else raw_job
+                
+                website = task_data.get('websiteId')
+                url = website.get('url') if isinstance(website, dict) else website
+                
+                form_data = task_data.get('formData')
+                if not form_data and isinstance(raw_job, dict):
+                    form_data = raw_job.get('fields')
+                
+                task = {
+                    'job_id': job_id,
+                    'submission_id': submission_id,
+                    'url': url,
+                    'form_data': form_data
+                }
+                
+                logger.info(f"Executing task {submission_id}")
+                result = execute_task(task)
+                
+                # Report result
+                if result['success']:
+                    api_client.report_success(
+                        submission_id, 
+                        result['logs'], 
+                        result['evidence']
+                    )
+                else:
+                    api_client.report_failure(
+                        submission_id,
+                        result.get('error', 'Unknown error'),
+                        result['logs']
+                    )
+                
+                # Brief pause between tasks
+                time.sleep(random.uniform(1, 2))
+                
+            except Exception as e:
+                logger.error(f"Worker loop error: {e}")
+                time.sleep(5)
+        
+        logger.info("Smart Worker stopped - Resources saved!")
+
+def start_smart_worker():
+    """Start the smart worker"""
+    worker = SmartWorker(
+        idle_timeout_minutes=int(config.get('IDLE_TIMEOUT_MINUTES', 5)),
+        max_empty_polls=int(config.get('MAX_EMPTY_POLLS', 10))
+    )
+    worker.run()
