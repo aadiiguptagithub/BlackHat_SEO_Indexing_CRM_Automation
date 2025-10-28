@@ -6,6 +6,7 @@ import time
 import random
 import signal
 import sys
+import os
 from datetime import datetime, timedelta
 from .task_executor import execute_task
 from src.client.api import api_client
@@ -119,7 +120,7 @@ class SmartWorker:
 def start_smart_worker():
     """Start the smart worker"""
     worker = SmartWorker(
-        idle_timeout_minutes=int(config.get('IDLE_TIMEOUT_MINUTES', 5)),
-        max_empty_polls=int(config.get('MAX_EMPTY_POLLS', 10))
+        idle_timeout_minutes=int(os.getenv('IDLE_TIMEOUT_MINUTES', '5')),
+        max_empty_polls=int(os.getenv('MAX_EMPTY_POLLS', '10'))
     )
     worker.run()
