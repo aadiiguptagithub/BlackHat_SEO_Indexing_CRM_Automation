@@ -29,5 +29,8 @@ COPY . .
 # Create directories
 RUN mkdir -p /app/artifacts /app/logs
 
+# Set PYTHONPATH
+ENV PYTHONPATH=/app
+
 # Run the worker
-CMD ["python", "src/main.py"]
+CMD ["python", "-m", "src.main"]
