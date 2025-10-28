@@ -14,12 +14,13 @@ from src.config import config
 from src.utils.logging import logger
 
 class SmartWorker:
-    def __init__(self, idle_timeout_minutes=5, max_empty_polls=10):
+    def __init__(self, idle_timeout_minutes=30, max_empty_polls=999999):
         self.running = True
         self.idle_timeout = timedelta(minutes=idle_timeout_minutes)
         self.max_empty_polls = max_empty_polls
         self.empty_poll_count = 0
         self.last_task_time = datetime.now()
+        self.max_sleep_time = 300  # 5 minutes max sleep
         
         signal.signal(signal.SIGINT, self._shutdown_handler)
         signal.signal(signal.SIGTERM, self._shutdown_handler)
@@ -57,14 +58,19 @@ class SmartWorker:
                 if not task_data:
                     self.empty_poll_count += 1
                     
-                    # Check if should shutdown
-                    if self._should_shutdown():
-                        logger.info("Initiating graceful shutdown")
-                        break
+                    # Exponential backoff: 3s, 10s, 30s, 60s, 120s, 300s (5 min max)
+                    if self.empty_poll_count <= 3:
+                        sleep_time = 3 * self.empty_poll_count  # 3s, 6s, 9s
+                    elif self.empty_poll_count <= 6:
+                        sleep_time = 30  # 30s
+                    elif self.empty_poll_count <= 10:
+                        sleep_time = 60  # 1 min
+                    elif self.empty_poll_count <= 15:
+                        sleep_time = 120  # 2 min
+                    else:
+                        sleep_time = self.max_sleep_time  # 5 min
                     
-                    # Sleep with exponential backoff
-                    sleep_time = min(30, config.POLL_INTERVAL_MS / 1000 * (1 + self.empty_poll_count * 0.5))
-                    logger.debug(f"No tasks, sleeping {sleep_time:.1f}s (empty polls: {self.empty_poll_count})")
+                    logger.info(f"No tasks, sleeping {sleep_time}s (poll #{self.empty_poll_count})")
                     time.sleep(sleep_time)
                     continue
                 
